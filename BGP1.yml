@@ -1,0 +1,212 @@
+- name: Run command on Cisco routers
+
+  hosts: routers
+
+  gather_facts: no
+
+  connection: local
+
+  tasks:
+
+    - name: Prompt for IC number
+
+      pause:
+
+        prompt: "Enter IC number (e.g., IC123): "
+
+      register: ic_input
+
+
+
+    - name: Run show interface description command
+
+      ios_command:
+
+        commands:
+
+          - "show interfaces description | include {{ ic_input.user_input }}"
+
+      register: show_output
+
+
+
+    - name: Extract interface related to IC
+
+      set_fact:
+
+        ic_interface: "{{ show_output.stdout_lines[0][0].split()[0] }}"
+
+
+
+    - name: Print interface related to IC
+
+      debug:
+
+        var: ic_interface
+
+
+
+    - name: Run show interface status command
+
+      ios_command:
+
+        commands:
+
+          - "show interface {{ ic_interface }}"
+
+      register: interface_status
+
+
+
+    - name: Check if interface is UP or DOWN
+
+      set_fact:
+
+        is_interface_down: "{{ 'down' in interface_status.stdout_lines | map('lower') | join('') }}"
+
+
+
+    - name: Print interface status (UP/DOWN)
+
+      debug:
+
+        msg: "Interface {{ ic_interface }} is {{ 'DOWN' if is_interface_down else 'UP' }}"
+
+
+
+    - name: Show interface configuration
+
+      ios_command:
+
+        commands:
+
+          - "show running-config interface {{ ic_interface }} | include ip address"
+
+      register: interface_config
+
+
+
+    - name: Print interface configuration
+
+      debug:
+
+        var: interface_config.stdout_lines
+
+
+
+    - name: Show IP interface brief
+
+      ios_command:
+
+        commands:
+
+          - "show ip interface brief"
+
+      register: ip_interface_brief
+
+
+
+    - name: Print IP interface brief
+
+      debug:
+
+        var: ip_interface_brief.stdout_lines
+
+
+
+    - name: Extract IP address from interface brief
+
+      set_fact:
+
+        ip_address: "{{ ip_interface_brief.stdout_lines | regex_search('FastEthernet0/1\\s+([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)') | default('IP not found', true) | regex_replace('.*\\s+([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)', '\\1') }}"
+
+      when: "'FastEthernet0/1' in ip_interface_brief.stdout | join(' ')"
+
+
+
+    - name: Increment last octet of IP address
+
+      set_fact:
+
+        updated_ip_address: "{{ ip_address.split('.')[0:3] | join('.') + '.' + (ip_address.split('.')[3] | int + 1) | string }}"
+
+      when: ip_address != 'IP not found'
+
+
+
+    - name: Print updated IP address
+
+      debug:
+
+        var: updated_ip_address
+
+
+
+    - name: Ping the updated IP address from the router
+
+      ios_command:
+
+        commands:
+
+          - "ping {{ updated_ip_address }}"
+
+      register: ping_result
+
+
+
+    - name: Print ping result
+
+      debug:
+
+        var: ping_result.stdout_lines
+
+        
+
+    - name: Check if the destination is reachable
+
+      debug:
+
+        msg: "Destination is reachable"
+
+      when: ping_result.stdout_lines[0] is search('Success rate is 100 percent')
+
+
+
+    - name: Check if the destination is unreachable
+
+      debug:
+
+        msg: "Destination is unreachable"
+
+      when: ping_result.stdout_lines[0] is search('Success rate is 0 percent')
+
+
+
+
+
+    - name: Check BGP status
+
+      ios_command:
+
+        commands:
+
+          - "show ip bgp neighbors {{ updated_ip_address }} | i BGP state"
+
+      register: bgp_status
+
+
+
+    - name: Print BGP status
+
+      debug:
+
+        var: bgp_status.stdout_lines
+
+
+
+    - name: Check and print BGP status
+
+      debug:
+
+        msg: "BGP is {{ 'established' if 'BGP state = Established' in bgp_status.stdout | join('') else 'down' }}"
+
